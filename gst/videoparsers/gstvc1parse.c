@@ -268,7 +268,7 @@ gst_vc1_parse_reset (GstVC1Parse * vc1parse)
 {
   vc1parse->profile = -1;
   vc1parse->level = -1;
-  vc1parse->format = 0;
+  vc1parse->format = GST_VC1_PARSE_FORMAT_WMV3;
   vc1parse->width = 0;
   vc1parse->height = 0;
   vc1parse->fps_n = vc1parse->fps_d = 0;
@@ -355,7 +355,8 @@ gst_vc1_parse_is_format_allowed (GstVC1Parse * vc1parse)
       break;
     case VC1_HEADER_FORMAT_NONE:
       /* In simple/main profile, there is no sequence header BDU */
-      if (vc1parse->profile != GST_VC1_PROFILE_ADVANCED &&
+      if ((vc1parse->profile != GST_VC1_PROFILE_ADVANCED &&
+              vc1parse->profile != -1 /* not extracted yet */ ) &&
           (vc1parse->output_stream_format == VC1_STREAM_FORMAT_BDU ||
               vc1parse->output_stream_format == VC1_STREAM_FORMAT_BDU_FRAME ||
               vc1parse->output_stream_format == VC1_STREAM_FORMAT_FRAME_LAYER))
@@ -510,8 +511,6 @@ gst_vc1_parse_renegotiate (GstVC1Parse * vc1parse)
     tmp = gst_caps_make_writable (tmp);
     s = gst_caps_get_structure (tmp, 0);
 
-    /* If already fixed this does nothing */
-    gst_structure_fixate_field_string (s, "header-format", "asf");
     header_format = gst_structure_get_string (s, "header-format");
     if (!header_format) {
       vc1parse->output_header_format = vc1parse->input_header_format;
@@ -523,8 +522,6 @@ gst_vc1_parse_renegotiate (GstVC1Parse * vc1parse)
           header_format_from_string (header_format);
     }
 
-    /* If already fixed this does nothing */
-    gst_structure_fixate_field_string (s, "stream-format", "asf");
     stream_format = gst_structure_get_string (s, "stream-format");
     if (!stream_format) {
       vc1parse->output_stream_format = vc1parse->input_stream_format;
@@ -636,23 +633,6 @@ gst_vc1_parse_detect (GstBaseParse * parse, GstBuffer * buffer)
   data = minfo.data;
   size = minfo.size;
 
-#if 0
-  /* FIXME: disable BDU check for now as BDU parsing needs more work.
-   */
-  while (size >= 4) {
-    guint32 startcode = GST_READ_UINT32_BE (data);
-
-    if ((startcode & 0xffffff00) == 0x00000100) {
-      GST_DEBUG_OBJECT (vc1parse, "Found BDU startcode");
-      vc1parse->input_stream_format = VC1_STREAM_FORMAT_BDU_FRAME;
-      goto detected;
-    }
-
-    data += 4;
-    size -= 4;
-  }
-#endif
-
   while (size >= 40) {
     if (data[3] == 0xc5 && GST_READ_UINT32_LE (data + 4) == 0x00000004 &&
         GST_READ_UINT32_LE (data + 20) == 0x0000000c) {
@@ -688,6 +668,24 @@ gst_vc1_parse_detect (GstBaseParse * parse, GstBuffer * buffer)
         "and draining now");
     gst_buffer_unmap (buffer, &minfo);
     return GST_FLOW_ERROR;
+  }
+
+  data = minfo.data;
+  size = minfo.size;
+  if (size >= 4) {
+    GstVC1ParserResult pres;
+    GstVC1BDU bdu;
+
+    pres = gst_vc1_identify_next_bdu (data, size, &bdu);
+    if (pres == GST_VC1_PARSER_OK) {
+      GST_DEBUG_OBJECT (vc1parse, "Found a complete BDU");
+      GstVC1StartCode startcode = data[3];
+      if (startcode == GST_VC1_SEQUENCE) {
+        GST_DEBUG_OBJECT (vc1parse, "Assuming bdu-frame stream format");
+        vc1parse->input_stream_format = VC1_STREAM_FORMAT_BDU_FRAME;
+        goto detected;
+      }
+    }
   }
 
   /* Otherwise we try some heuristics */
@@ -2095,6 +2093,9 @@ gst_vc1_parse_handle_seq_hdr (GstVC1Parse * vc1parse,
   if (profile == GST_VC1_PROFILE_ADVANCED) {
     GstVC1Level level;
     gint width, height;
+
+    vc1parse->format = GST_VC1_PARSE_FORMAT_WVC1;
+
     level = vc1parse->seq_hdr.advanced.level;
     if (vc1parse->level != level) {
       vc1parse->update_caps = TRUE;
