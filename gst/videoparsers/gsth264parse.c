@@ -2294,6 +2294,7 @@ gst_h264_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
   GstH264Parse *h264parse;
   GstBuffer *buffer;
   GstEvent *event;
+  gint i = 0, sps_num = 0, pps_num = 0;
 
   h264parse = GST_H264_PARSE (parse);
 
@@ -2383,6 +2384,24 @@ gst_h264_parse_pre_push_frame (GstBaseParse * parse, GstBaseParseFrame * frame)
     if (h264parse->idr_pos >= 0) {
       GST_LOG_OBJECT (h264parse, "IDR nal at offset %d", h264parse->idr_pos);
 
+      gst_h264_parse_handle_sps_pps_nals (h264parse, buffer, frame);
+
+      /* we pushed whatever we had */
+      h264parse->push_codec = FALSE;
+      h264parse->have_sps = FALSE;
+      h264parse->have_pps = FALSE;
+      h264parse->state &= GST_H264_PARSE_STATE_VALID_PICTURE_HEADERS;
+    }
+  } else {
+    for (i = 0; i < GST_H264_MAX_SPS_COUNT; i++)
+      if (h264parse->sps_nals[i])
+        ++sps_num;
+
+    for (i = 0; i < GST_H264_MAX_PPS_COUNT; i++)
+      if (h264parse->pps_nals[i])
+        ++pps_num;
+
+    if (h264parse->idr_pos >= 0 && (sps_num > 1 || pps_num > 1)) {
       gst_h264_parse_handle_sps_pps_nals (h264parse, buffer, frame);
 
       /* we pushed whatever we had */
